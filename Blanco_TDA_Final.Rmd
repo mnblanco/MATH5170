@@ -1,0 +1,491 @@
+---
+title: "Topological Data Analysis - New York City Collision"
+author: "Marjorie Blanco"
+date: "11/24/2018"
+output: html_document
+# output:
+#   html_document:
+#     toc: true
+#     toc_float: true
+#     number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, error = FALSE, message = FALSE)
+
+# Clear packages 
+if(is.null(sessionInfo()$otherPkgs) == FALSE)lapply(
+  paste("package:", names(sessionInfo()$otherPkgs), sep=""),
+  detach, character.only = TRUE, unload = TRUE)
+
+# Clear environment
+rm(list = ls(all = TRUE))
+
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+# Overview
+
+Machine Learning (ML) and Topological Data Analysis (TDA) are different approaches to data analysis, each of which has its own strengths and weaknesses relative to the other.  
+
+## Load the libraries
+
+I used the following libraries for the analysis and visualization. I don’t show the code for most of the data cleaning and analysis steps to keep the post concise but the code can be found on Github.  TDA package is used for its persistent homology capabilities. The TDAmapper implements the Mapper algorithm.  The ggmap to visualize spatial data and models on top of static maps from google.
+
+```{r library, echo=TRUE}
+library(readxl)
+library(TDA)
+library(dplyr)
+library(ggplot2)
+library(ggmap)
+library(TDAmapper)
+library(igraph)
+library(geosphere)
+library(lubridate)
+```
+
+```{r get_map}
+#Get NYC map from google map
+nyc <- ggmap(get_googlemap(center = c(lon = -74.0060, lat = 40.7128),
+                           key = "AIzaSyBlh3p_FmzjhFiOZPT558VfInF1fWWoZps",
+                           zoom = 10, scale = 2,
+                           maptype ='terrain',
+                           color = 'color'))
+
+nyc1 <- ggmap(get_googlemap(center = c(lon = -74.0060, lat = 40.7128),
+                           key = "AIzaSyBlh3p_FmzjhFiOZPT558VfInF1fWWoZps",
+                           zoom = 11, scale = 2,
+                           maptype ='terrain',
+                           color = 'color'))
+```
+
+```{r supporting_functions}
+plotPoint <- function(Y) 
+{
+  plot(Y %>% select(x,y),  main = "Representative loop of data points", col = Y$cluster, xlab = "Longitude", ylab = "Latitude")
+  
+  for (i in levels(Y$cluster))
+  {
+    X <- Y  %>% filter(cluster == i) %>% select(x, y)
+    
+    # persistence diagram of alpha complex
+    DiagAlphaCmplx <- alphaComplexDiag(
+      X = X, library = c("GUDHI", "Dionysus"), location = TRUE,
+      printProgress = FALSE)
+    
+    # plot points
+    one <- which(DiagAlphaCmplx[["diagram"]][, 1] == 1)
+    one <- one[which.max(
+      DiagAlphaCmplx[["diagram"]][one, 3] - DiagAlphaCmplx[["diagram"]][one, 2])]
+    for (i in seq(along = one)) {
+      for (j in seq_len(dim(DiagAlphaCmplx[["cycleLocation"]][[one[i]]])[1])) {
+        lines(
+          DiagAlphaCmplx[["cycleLocation"]][[one[i]]][j, , ], pch = 19, cex = 1,
+          col = i)
+      }
+    }
+  }
+}
+
+plotPoint2 <- function(Y) 
+{
+  p <- nyc + geom_point(aes(x = x, y = y, colour = cluster), size = 0.5, data = Y) +
+    theme(legend.position="bottom") +
+    labs(title = "New York City Collision",
+         subtitle = paste("Representative loop of data points for", length(levels(Y$cluster)), "cluster(s)", sep=" "),
+         x = "Longitude",
+         y = "Latitude")
+  
+  for (i in levels(Y$cluster))
+  {
+    X <- Y  %>% filter(cluster == i) %>% select(x, y)
+    # persistence diagram of alpha complex
+    DiagAlphaCmplx <- alphaComplexDiag(
+      X = X, library = c("GUDHI", "Dionysus"), location = TRUE,
+      printProgress = FALSE)
+    
+    # plot points
+    one <- which(DiagAlphaCmplx[["diagram"]][, 1] == 1)
+    one <- one[which.max(
+      DiagAlphaCmplx[["diagram"]][one, 3] - DiagAlphaCmplx[["diagram"]][one, 2])]
+    for (i in seq(along = one)) {
+      for (j in seq_len(dim(DiagAlphaCmplx[["cycleLocation"]][[one[i]]])[1])) {
+        
+        con <- data.frame(DiagAlphaCmplx[["cycleLocation"]][[one[i]]][j, , ])
+        colnames(con) <- c("x", "y")
+        p <- p +
+          geom_line(aes(x=x, y=y), data = con)
+      }
+    }
+  }
+  p
+}
+
+plotPoint3 <- function(Y, tree)  {
+  p <- nyc + #geom_point(aes(x = x, y = y, colour = cluster), data = Y) +
+    theme(legend.position="bottom") +
+    labs(title = "New York City Collision",
+         subtitle = paste("Representative loop of data points for", length(tree[["id"]]), "cluster(s)", sep=" "),
+         x = "Longitude",
+         y = "Latitude")
+  data_points <- data.frame(x = as.double(), y = as.double(), cluster = as.integer()) 
+  for (i in tree[["id"]]){
+    X <- Y[tree$DataPoints[[i]],]
+    data_points <- rbind(data_points, as.data.frame(X) %>% mutate(cluster = i))
+    
+    
+    if (nrow(X) > 2)
+    {
+      # persistence diagram of alpha complex
+      DiagAlphaCmplx <- alphaComplexDiag(
+        X = X, library = c("GUDHI", "Dionysus"), location = TRUE,
+        printProgress = FALSE)
+      
+      # plot points
+      one <- which(DiagAlphaCmplx[["diagram"]][, 1] == 1)
+      one <- one[which.max(
+        DiagAlphaCmplx[["diagram"]][one, 3] - DiagAlphaCmplx[["diagram"]][one, 2])]
+      for (i in seq(along = one)) {
+        for (j in seq_len(dim(DiagAlphaCmplx[["cycleLocation"]][[one[i]]])[1])) {
+          
+          
+          con <- data.frame(DiagAlphaCmplx[["cycleLocation"]][[one[i]]][j, , ])
+          colnames(con) <- colnames(con) <- c("x", "y")
+          p <- p +
+            geom_line(aes(x=x, y=y), data = con)
+        }
+        
+      }
+    }
+  }
+  
+  data <- data %>% na.omit()
+  p + geom_point(aes(x=x, y=y, color = factor(cluster)), size = 0.5, data = data_points) +
+    geom_jitter()
+}
+
+TreeKNNCluster <- function(Y, K) 
+{
+  X <- Y %>% select(x, y)
+  Tree <- clusterTree(X, k = K, density = "knn",
+                      printProgress = FALSE)
+  return(Tree)
+}
+
+writeJPG <- function(x, file)
+{
+  jpeg(file)
+  print(x)
+  dev.off()
+}
+```
+
+## New York City Collision Data
+
+```{r read_data}
+#read NY collisions dataset
+NYC_Collisions <- read_excel("NYC_Collisons.xlsx")
+# time  interval
+x=as.POSIXct(strptime(c("1899-12-31 000000","1899-12-31 050000","1899-12-31 110000","1899-12-31 160000","1899-12-31 190000","235959"),
+                      "%Y-%m-%d %H%M%S"),"UTC")
+labs=c("night","morning","afternoon","evening","night")
+NYC_Collisions <- NYC_Collisions %>% mutate(time_day = case_when(
+  between(Time,x[1],x[2]) ~"morning",
+  between(Time,x[3],x[4]) ~"afternoon",
+  between(Time,x[5],x[6]) ~"evening",
+  TRUE ~"night"))
+
+NYC_Collisions <- NYC_Collisions %>% mutate(hour=hour(Time))
+
+NYC_Collisions <- NYC_Collisions %>% filter(!is.na(NYC_Collisions$Longitude)) %>%
+  mutate(Injured = ifelse(PersonsInjured == 0, 0, 1)) %>% 
+  mutate(PersonsInjured = factor(PersonsInjured)) %>%
+  mutate(Injured = factor(Injured)) %>%
+  mutate(time_day = factor(time_day)) 
+```
+
+
+This collision data consist of `r nrow(NYC_Collisions)` observations.  The collisions took place between `r min(NYC_Collisions$Time)` and `r max(NYC_Collisions$Time)`.  New York City encompasses five county-level administrative divisions called boroughs: Manhattan, Brooklyn, Queens, The Bronx, and Staten Island.  The data does not identify the boroughs.
+
+## Data Wrangling
+
+Overall the data file is clean with few missing observations, so here the main data wrangling tasks will include: 
+
+- Creating a time of the day variable (morning, afternoon, evening, night)
+- Injured: a boolean that indicates if a person was injured during the collision
+- Hour: extracting the hour from the date/time field
+
+## Data Records
+
+- Date: the date of collision Format: Year-Month-Date 
+- Time: the date/time when collision occurred Format:Year-Month-Date Hour:Minutes:Second UTC
+- Latitude
+- Longitude
+- Person Injured: the number of persons injured
+
+The following are derived fields
+
+- Time Day: the time of day of collision (afternoon or evening)
+- Hour: the hour of when collision occurred
+- Injured: a true/false flag that indicates if a person was injured
+
+
+# Explanatory Data Analysis
+
+This data set is balanced with equal amounts of accidents occurring in the afternoon and night.
+
+```{r echo=FALSE}
+ggplot() +
+  geom_bar(aes(x=time_day), NYC_Collisions) +
+  ggtitle("Total Accidents by Time Day") +
+  xlab("Time Day") + ylab("Total Accidents")+
+  theme(plot.title = element_text(hjust = 0.5), panel.background = element_blank())
+```
+
+The total number of accidents increases with time.
+
+```{r}
+ggplot() +
+  geom_bar(aes(x=factor(hour)), NYC_Collisions) +
+  ggtitle("Total Accidents by Hours") +
+  xlab("Hours") + ylab("Total Accidents")+
+  theme(plot.title = element_text(hjust = 0.5), panel.background = element_blank())
+```
+
+The majority of accidents did not involved people being injured.
+
+```{r}
+ggplot() +
+  geom_bar(aes(x=factor(Injured)), NYC_Collisions) +
+  ggtitle("Total Accidents by Injured") +
+  xlab("Injured") + ylab("Total Accidents")+
+  theme(plot.title = element_text(hjust = 0.5), panel.background = element_blank())
+```
+
+# Topological Data Analysis
+
+## Clustering (stats package)
+
+### Clustering using K-Means Clustering from stats package
+
+In this section, the data was clustered using k-means. The number of cluster used are 1 (none) through 7.
+
+```{r clustering}
+#Clustering using k-means
+set.seed(20)
+clusters2 <- kmeans(NYC_Collisions[,3:4], 2)
+clusters3 <- kmeans(NYC_Collisions[,3:4], 3)
+clusters4 <- kmeans(NYC_Collisions[,3:4], 4)
+clusters5 <- kmeans(NYC_Collisions[,3:4], 5)
+clusters6 <- kmeans(NYC_Collisions[,3:4], 6)
+clusters7 <- kmeans(NYC_Collisions[,3:4], 7)
+
+# Save the cluster number in the dataset 
+NYC_Collisions$cluster1 <- as.factor(1)
+NYC_Collisions$cluster2 <- as.factor(clusters2$cluster)
+NYC_Collisions$cluster3 <- as.factor(clusters3$cluster)
+NYC_Collisions$cluster4 <- as.factor(clusters4$cluster)
+NYC_Collisions$cluster5 <- as.factor(clusters5$cluster)
+NYC_Collisions$cluster6 <- as.factor(clusters6$cluster)
+NYC_Collisions$cluster7 <- as.factor(clusters7$cluster)
+```
+
+#### No clustering
+
+In this map we identify a hole that includes east river.
+
+```{r plot-data1}
+#qmplot(Longitude, Latitude, data = NYC_Collisions)
+Y <- NYC_Collisions %>%  mutate(x = Longitude, y = Latitude, cluster =  cluster1) %>% select(x, y, cluster)
+plotPoint(Y)
+plotPoint2(Y)
+```
+
+#### K-Mean K = 2
+
+In this map we identify an holes (parallelogram) in Staten Island.
+
+```{r plot-data2}
+Y <- NYC_Collisions %>%  mutate(x = Longitude, y = Latitude, cluster =  cluster2) %>% select(x, y, cluster)
+plotPoint(Y)
+plotPoint2(Y)
+```
+
+#### K-Mean K = 3
+
+In this map we identify holes in Staten Island, Queens and upper east side of Manhattan.
+
+```{r plot-data3}
+Y <- NYC_Collisions %>%  mutate(x = Longitude, y = Latitude, cluster =  cluster3) %>% select(x, y, cluster)
+plotPoint(Y)
+plotPoint2(Y)
+```
+
+#### K-Mean K = 4
+
+In this map we identify holes in Staten Island, Queens, lower Manhattan and Harlem.
+
+```{r plot-data4}
+Y <- NYC_Collisions %>%  mutate(x = Longitude, y = Latitude, cluster =  cluster4) %>% select(x, y, cluster)
+plotPoint(Y)
+plotPoint2(Y)
+```
+
+#### K-Mean K = 5
+
+In this map we identify holes in Staten Island, Queens, lower Manhattan, Harlem and Brooklyn.
+
+```{r plot-data5}
+Y <- NYC_Collisions %>%  mutate(x = Longitude, y = Latitude, cluster =  cluster5) %>% select(x, y, cluster)
+plotPoint(Y)
+plotPoint2(Y)
+```
+
+#### K-Mean K = 6
+
+In this map we identify holes in Staten Island, Queens, lower Manhattan, Harlem, Brooklyn and Bronx.
+
+```{r plot-data6}
+Y <- NYC_Collisions %>%  mutate(x = Longitude, y = Latitude, cluster =  cluster6) %>% select(x, y, cluster)
+plotPoint(Y)
+plotPoint2(Y)
+```
+
+#### K-Mean K = 7
+
+In this map we identify an additional holes in Staten Island, Queens, lower Manhattan, Harlem, Brooklyn and Bronx.
+
+```{r plot-data7}
+Y <- NYC_Collisions %>%  mutate(x = Longitude, y = Latitude, cluster =  cluster7) %>% select(x, y, cluster)
+plotPoint(Y)
+plotPoint2(Y)
+```
+
+#### K-Mean K = 2 (Injured)
+
+In this map we identify two holes that includes east river and Brooklyn.
+
+```{r plot-data8}
+Y <- NYC_Collisions %>%  mutate(x = Longitude, y = Latitude, cluster =  Injured) %>% select(x, y, cluster)
+plotPoint(Y)
+plotPoint2(Y)
+```
+
+#### K-Mean K = 2 (Time of day)
+
+In this map we identify two holes in Manhattan (afternoon) and Queens/Brooklyn (night).
+
+```{r plot-data9}
+Y <- NYC_Collisions %>%  mutate(x = Longitude, y = Latitude, cluster =  time_day) %>% select(x, y, cluster)
+plotPoint(Y)
+plotPoint2(Y)
+```
+
+### Clustering using TreeKNN
+
+In this map we identify 20 holes in the 5 Boroughs of New York City.
+
+```{r TreeKNN1}
+Y <- NYC_Collisions %>%  mutate(x = Longitude, y = Latitude) %>% select(x, y)
+tree <- TreeKNNCluster(Y, 20)
+plotPoint3(Y, tree)
+```
+
+In this map we identify various holes in the 5 Boroughs of New York City.
+
+```{r TreeKNN2}
+tree <- TreeKNNCluster(Y, 10)
+plotPoint3(Y, tree)
+```
+
+In this map we identify various holes in the 5 Boroughs of New York City.
+
+```{r TreeKNN3}
+tree <- TreeKNNCluster(Y, 5)
+plotPoint3(Y, tree)
+```
+
+## mapper1D to identify figures
+
+Conducted topological data analysis using mapper from the TDAmapper package.  Here are the steps to yield the visualization above:
+
+1. Apply some map (filter) to the data
+
+2. Use hierarchical clustering to create a cover
+
+3. Run clustering algorithm
+
+4. Represent data clusters as nodes, and connect nodes whose clusters overlap
+
+```{r mapper1D}
+par(mfrow = c(1, 1))
+Y <- NYC_Collisions %>%  mutate(x = Longitude, y = Latitude) %>% select(x, y)
+
+NYC_Collisions.dist = dist(Y)
+
+bins <- 4
+for (i in 0:15) {
+  m1 <- mapper1D(
+    distance_matrix = NYC_Collisions.dist,
+    filter_values = NYC_Collisions$Latitude,
+    num_intervals = 9+i,
+    percent_overlap = 50,
+    num_bins_when_clustering = bins)
+  g1 <- graph.adjacency(m1$adjacency, mode="undirected")
+  plot(g1, layout = layout.auto(g1), main = paste("Number of clusteing", bins, "Intervals ", 9+i, sep = " "))
+}
+
+bins <- 5
+for (i in 0:15) {
+  m1 <- mapper1D(
+    distance_matrix = NYC_Collisions.dist,
+    filter_values = NYC_Collisions$Latitude,
+    num_intervals = 9+i,
+    percent_overlap = 50,
+    num_bins_when_clustering = bins)
+  g1 <- graph.adjacency(m1$adjacency, mode="undirected")
+  plot(g1, layout = layout.auto(g1), main = paste("Number of clusteing", bins, "Intervals ", 9+i, sep = " "))
+}
+```
+
+## Additional Plotting
+
+```{r}
+qmplot(Longitude, Latitude, data = NYC_Collisions, zoom = 11, geom = c("point","density2d"))
+qmplot(Longitude, Latitude, data = NYC_Collisions, zoom = 11, extent = "panel", colour = Injured)
+qmplot(Longitude, Latitude, data = NYC_Collisions, zoom = 11, extent = "panel", colour = Injured) +
+  facet_wrap(~ Injured)
+```
+
+## Silhouette and landscape
+
+The data shows a simple silhouette and landscape.
+
+```{r}
+X <- NYC_Collisions %>% mutate(x = Longitude, y = Latitude) %>% select(x, y)
+
+maxscale <- 1 # limit of the filtration
+maxdimension <- 1 # components and loops
+
+DiagRips <- ripsDiag(X, maxdimension, maxscale,
+                     library = c("GUDHI", "Dionysus"), location = TRUE, printProgress = TRUE)
+
+tseq <- seq(0, maxscale, length = 50) #domain
+Land <- landscape(DiagRips[["diagram"]], dimension = 1, KK = 1, tseq)
+Sil <- silhouette(DiagRips[["diagram"]], p = 1, dimension = 1, tseq)
+plot(tseq, Land, type = "l")
+plot(tseq, Sil, type = "l")
+```
+
+# Conclusion 
+
+The TDAmapper and TDA was able to provide more granular information on the NYC collision dataset compared to the ML K-means hierarchical clustering methods.  The holes identified are the safest areas of NYC where collisions did not take place.
+
+# Next step
+
+Here is a list of possible future analysis that can be performed by joining the current data set with weather and population area.
+
+- Collision severity by weather condition
+- Collision severity by area type
+- Ratio collision by area population
+
